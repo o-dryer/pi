@@ -1,1 +1,2 @@
-Flask~=1.0.2
+Flask
+adafruit-circuitpython-dht~=3.5.4
