@@ -2,6 +2,7 @@ import atexit
 import csv
 import logging
 import os
+import threading
 import time
 from datetime import timedelta, datetime
 from csv import DictWriter
@@ -57,16 +58,12 @@ def write_log():
         writer: DictWriter = csv.DictWriter(file, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
-        humidity = dht_device.humidity
-        temperature = dht_device.temperature
-        writer.writerow({'time': time_as_string(),
-                         'state': window_state,
-                         'humidity': humidity,
-                         'temperature': temperature})
+        state = get_state()
+        writer.writerow(state)
         file.close()
         if s.empty():
-            if humidity > MAX_HUM and \
-                    temperature > MIN_TEMP and \
+            if state['humidity'] > MAX_HUM and \
+                    state['temperature'] > MIN_TEMP and \
                     datetime.now() > rest_until:
                 schedule_open(AUTO_OPEN_LENGTH)
                 t = Thread(target=run_queue)
@@ -84,14 +81,28 @@ rec = Thread(target=write_log)
 rec.start()
 
 
+def get_state():
+    lock = threading.Lock()
+    state = {'time': time_as_string(),
+             'state': window_state,
+             'humidity': -1,
+             'temperature': -100}
+    lock.acquire()
+    try:
+        state['humidity'] = dht_device.humidity
+        state['temperature'] = dht_device.temperature
+    except Exception as e:
+        logging.warning('Cannot read sensor data: %s', e)
+    lock.release()
+    return state
+
+
 @app.route('/')
 def info():
     logging.debug('Opening main page')
-    temperature = dht_device.temperature
-    humidity = dht_device.humidity
-    current_time = time_as_string()
+    state = get_state()
 
-    return f'Temperature {temperature}°C and humidity {humidity}% as of {current_time}.<br/>' \
+    return f'Temperature {state["temperature"]}°C and humidity {state["humidity"]}% as of {state["time"]}.<br/>' \
            f'<a href="open/2">open window</a>'
 
 
