@@ -1,15 +1,17 @@
 import atexit
-from csv import DictWriter
-from flask import Flask
-import datetime
-import board
-import adafruit_dht
-import RPi.GPIO as GPIO
-import time
-import logging
 import csv
+import logging
+import os
+import time
+from datetime import timedelta, datetime
+from csv import DictWriter
 from sched import scheduler
 from threading import Thread
+
+import RPi.GPIO as GPIO
+import adafruit_dht
+import board
+from flask import Flask
 
 # TODO: Move to config file
 PORT_DHT = board.D14
@@ -25,6 +27,11 @@ DIRECTION_CLOSE = 1
 MAX_RUNTIME = 8
 PROTOCOL_INTERVAL = 30
 LOGLEVEL = logging.DEBUG
+MAX_HUM = 60
+MIN_TEMP = 22
+AUTO_OPEN_LENGTH = 180
+AUTO_OPEN_REST = 900
+rest_until = datetime.now()
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=LOGLEVEL)
 logging.debug('Start logging')
@@ -40,31 +47,41 @@ s = scheduler(time.time, time.sleep)
 recorder = scheduler(time.time, time.sleep)
 
 
-def get_writer():
-    file = open('windowLog.csv', 'a+')
-    fieldnames = ['time', 'state', 'humidity', 'temperature']
-    writer: DictWriter = csv.DictWriter(file, fieldnames=fieldnames)
-    writer.writeheader()
-    return writer
+def write_log():
+    global window_state, rest_until
+    date = datetime.today().strftime("%y%m%d")
+    filename = f'{date}.csv'
+    file_exists = os.path.isfile(filename)
+    with open(f'{date}.csv', 'a+') as file:
+        fieldnames = ['time', 'state', 'humidity', 'temperature']
+        writer: DictWriter = csv.DictWriter(file, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        humidity = dht_device.humidity
+        temperature = dht_device.temperature
+        writer.writerow({'time': time_as_string(),
+                         'state': window_state,
+                         'humidity': humidity,
+                         'temperature': temperature})
+        file.close()
+        if s.empty():
+            if humidity > MAX_HUM and \
+                    temperature > MIN_TEMP and \
+                    datetime.now() > rest_until:
+                schedule_open(AUTO_OPEN_LENGTH)
+                t = Thread(target=run_queue)
+                t.start()
+                rest_until = (datetime.now() + timedelta(seconds=AUTO_OPEN_REST))
+        recorder.enter(PROTOCOL_INTERVAL, 1, write_log)
+        recorder.run()
 
 
 def time_as_string():
-    return datetime.datetime.now().strftime("%H:%M:%S")
+    return datetime.now().strftime("%H:%M:%S")
 
 
-def record_state():
-    global protocol
-    protocol.writerow({'time': time_as_string(),
-                       'state': window_state,
-                       'humidity': dht_device.humidity,
-                       'temperature': dht_device.temperature})
-    recorder.enter(PROTOCOL_INTERVAL, 1, record_state)
-    recorder.run()
-
-
-protocol = get_writer()
-rec = Thread(target=record_state)
-rec.run()
+rec = Thread(target=write_log)
+rec.start()
 
 
 @app.route('/')
@@ -81,8 +98,6 @@ def info():
 def stop_power():
     global window_state
     logging.debug('Stopping power')
-    if window_state.endswith('ing'):
-        window_state = window_state[0: -3]
     window_state = f"stopped ({window_state})"
     GPIO.output(PORT_MAIN, POWER_OFF)
     GPIO.output(PORT_DIRECTION, POWER_OFF)
@@ -122,10 +137,10 @@ def run_queue():
 @atexit.register
 def shutdown():
     global window_state
-    logging.info("shutting down")
-    if window_state not in ['stopped (close)', 'shutdown']:
+    logging.debug("shutting down")
+    if window_state not in ['stopped (closing)', 'shutdown']:
         window_state = 'shutdown'
-        logging.info("closing window (shutdown)")
+        logging.debug("closing window (shutdown)")
         start_closing()
         list(map(s.cancel, s.queue))
         s.enter(MAX_RUNTIME, 2, stop_power)
@@ -134,11 +149,15 @@ def shutdown():
 
 @app.route('/open/<int:minutes>')
 def open_window(minutes: int = 2):
+    global rest_until
     logging.debug('Opening window open page')
     schedule_open(minutes * 60)
     t = Thread(target=run_queue)
     t.start()
-    final_time = (datetime.datetime.now() + datetime.timedelta(minutes=minutes)).strftime("%H:%M:%S")
+    close_time = (datetime.now() + timedelta(minutes=minutes))
+    final_time = close_time.strftime("%H:%M:%S")
+    rest_until = close_time + timedelta(seconds=AUTO_OPEN_REST)
+
     # TODO: Consider flask.Response(schedule_open(), mimetype='text/html')
     return f'Opening window until {final_time}.'
 
