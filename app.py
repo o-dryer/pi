@@ -30,7 +30,7 @@ PROTOCOL_INTERVAL = 30
 LOGLEVEL = logging.DEBUG
 MAX_HUM = 60
 MIN_TEMP = 22
-AUTO_OPEN_LENGTH = 180
+AUTO_OPEN_LENGTH = 600
 AUTO_OPEN_REST = 900
 rest_until = datetime.now()
 
@@ -38,11 +38,11 @@ logging.basicConfig(format='%(asctime)s %(message)s', level=LOGLEVEL)
 logging.debug('Start logging')
 
 app = Flask(__name__)
-dht_device = adafruit_dht.DHT22(PORT_DHT)
 GPIO.cleanup()
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(PORT_MAIN, GPIO.OUT, initial=POWER_OFF)
 GPIO.setup(PORT_DIRECTION, GPIO.OUT)
+dht_device = adafruit_dht.DHT22(PORT_DHT)
 window_state = 'unknown'
 s = scheduler(time.time, time.sleep)
 recorder = scheduler(time.time, time.sleep)
@@ -70,7 +70,11 @@ def write_log():
                 t.start()
                 rest_until = (datetime.now() + timedelta(seconds=AUTO_OPEN_REST))
         recorder.enter(PROTOCOL_INTERVAL, 1, write_log)
-        recorder.run()
+        Thread(target=run_recorder, daemon=False).start()
+
+
+def run_recorder():
+    recorder.run()
 
 
 def time_as_string():
@@ -82,18 +86,18 @@ rec.start()
 
 
 def get_state():
-    lock = threading.Lock()
+    global dht_device
+    logging.debug('Get state')
     state = {'time': time_as_string(),
              'state': window_state,
              'humidity': -1,
              'temperature': -100}
-    lock.acquire()
     try:
         state['humidity'] = dht_device.humidity
         state['temperature'] = dht_device.temperature
     except Exception as e:
         logging.warning('Cannot read sensor data: %s', e)
-    lock.release()
+    logging.debug('State returned')
     return state
 
 
