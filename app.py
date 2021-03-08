@@ -62,9 +62,11 @@ def write_log():
         writer.writerow(state)
         file.close()
         if s.empty():
+            current_hour = datetime.now().hour
             if state['humidity'] > MAX_HUM and \
                     state['temperature'] > MIN_TEMP and \
-                    datetime.now() > rest_until:
+                    datetime.now() > rest_until and \
+                    not (18 < current_hour < 20):
                 schedule_open(AUTO_OPEN_LENGTH)
                 t = Thread(target=run_queue)
                 t.start()
