@@ -66,7 +66,7 @@ def write_log():
             if state['humidity'] > MAX_HUM and \
                     state['temperature'] > MIN_TEMP and \
                     datetime.now() > rest_until and \
-                    not (18 < current_hour < 20):
+                    19 != current_hour:
                 schedule_open(AUTO_OPEN_LENGTH)
                 t = Thread(target=run_queue)
                 t.start()
