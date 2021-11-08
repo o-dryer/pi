@@ -14,3 +14,4 @@ sudo systemctl start window.service
 Functions
 * restart `sudo systemctl restart window.service`.
 * view logs `sudo journalctl -f -u window.service`
+* follow temperature data `tail -f `date +"%y%m%d"`.csv`

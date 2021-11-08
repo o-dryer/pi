@@ -5,6 +5,7 @@ After=multi-user.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 /home/pi/window/app.py
+WorkingDirectory=/home/pi/window/
 Restart=on-abort
 
 [Install]
