@@ -2,10 +2,9 @@ import atexit
 import csv
 import logging
 import os
-import threading
 import time
-from datetime import timedelta, datetime
 from csv import DictWriter
+from datetime import timedelta, datetime
 from sched import scheduler
 from threading import Thread
 
@@ -108,8 +107,11 @@ def info():
     logging.debug('Opening main page')
     state = get_state()
 
-    return f'Temperature {state["temperature"]}°C and humidity {state["humidity"]}% as of {state["time"]}.<br/>' \
-           f'<a href="open/2">open window</a>'
+    return f'Temperature {state["temperature"]}°C and ' \
+           f'humidity {state["humidity"]}% ' \
+           f'as of {state["time"]}.<br/>' \
+           f'<a href="open/2">open window</a><br/>' \
+           f'<a href="close">close window</a>'
 
 
 def stop_power():
@@ -177,6 +179,15 @@ def open_window(minutes: int = 2):
 
     # TODO: Consider flask.Response(schedule_open(), mimetype='text/html')
     return f'Opening window until {final_time}.'
+
+@app.route('/close')
+def close_window():
+    global rest_until
+    logging.debug('Close window manually.')
+    list(map(s.cancel, s.queue))
+    rest_until = datetime.now() + timedelta(seconds=AUTO_OPEN_REST)
+    start_closing()
+    return f'Closing window at least util {rest_until}.'
 
 
 if __name__ == '__main__':
