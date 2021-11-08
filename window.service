@@ -1,0 +1,11 @@
+[Unit]
+Description=Widow management sercice
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/pi/window/app.py
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target
