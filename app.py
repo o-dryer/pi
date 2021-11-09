@@ -29,7 +29,7 @@ PROTOCOL_INTERVAL = 30
 LOGLEVEL = logging.DEBUG
 MAX_HUM = 60
 MIN_TEMP = 20
-AUTO_OPEN_LENGTH = 600
+AUTO_OPEN_LENGTH = 60
 AUTO_OPEN_REST = 900
 rest_until = datetime.now()
 
@@ -73,11 +73,11 @@ def write_log():
         file.close()
         if s.empty():
             if should_open(state):
-                schedule_open(AUTO_OPEN_LENGTH)
+                schedule_open(-1)
                 t = Thread(target=run_queue)
                 t.start()
                 rest_until = (
-                            datetime.now() + timedelta(seconds=AUTO_OPEN_REST))
+                        datetime.now() + timedelta(seconds=AUTO_OPEN_REST))
         recorder.enter(PROTOCOL_INTERVAL, 1, write_log)
         Thread(target=run_recorder, daemon=False).start()
 
@@ -100,7 +100,7 @@ def get_state():
     state = {'time': time_as_string(),
              'state': window_state,
              'humidity': -1,
-             'temperature': -100}
+             'temperature': 100}
     try:
         state['humidity'] = dht_device.humidity
         state['temperature'] = dht_device.temperature
@@ -146,6 +146,16 @@ def start_opening():
     GPIO.output(PORT_DIRECTION, DIRECTION_OPEN)
 
 
+def check_open():
+    if check_open(get_state()):
+        logging.debug('Keeping window open.')
+        s.enter(AUTO_OPEN_LENGTH, 1, check_open)
+    else:
+        logging.debug('close window automatically')
+        start_closing()
+        s.enter(MAX_RUNTIME, 1, stop_power)
+
+
 def schedule_open(sec):
     global window_state
     if window_state == 'shutdown':
@@ -153,6 +163,9 @@ def schedule_open(sec):
     list(map(s.cancel, s.queue))
     s.enter(0, 1, start_opening)
     s.enter(MAX_RUNTIME, 1, stop_power)
+    if sec == -1:
+        s.enter(AUTO_OPEN_LENGTH, 1, check_open)
+        return
     s.enter(sec, 1, start_closing)
     s.enter(sec + MAX_RUNTIME, 1, stop_power)
 
