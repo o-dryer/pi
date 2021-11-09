@@ -112,6 +112,7 @@ def get_state():
 
 @app.route('/')
 def info():
+    global rest_until
     logging.debug('Opening main page')
     state = get_state()
 
@@ -119,8 +120,9 @@ def info():
            f'humidity {state["humidity"]}% ' \
            f'as of {state["time"]}.<br/>' \
            f'<a href="open/2">open window</a><br/>' \
-           f'<a href="close">close window</a>'
-
+           f'<a href="close">close window</a><br/>' \
+           f'The window is currently {state["state"]}' \
+           f'and will not move before {rest_until}'
 
 def stop_power():
     global window_state
