@@ -47,8 +47,19 @@ s = scheduler(time.time, time.sleep)
 recorder = scheduler(time.time, time.sleep)
 
 
-def write_log():
+def should_open(state):
     global window_state, rest_until
+
+    current_hour = datetime.now().hour
+
+    return state['humidity'] > MAX_HUM and \
+           state['temperature'] > MIN_TEMP and \
+           datetime.now() > rest_until and \
+           19 != current_hour
+
+
+def write_log():
+    global rest_until
     date = datetime.today().strftime("%y%m%d")
     filename = f'{date}.csv'
     file_exists = os.path.isfile(filename)
@@ -61,15 +72,12 @@ def write_log():
         writer.writerow(state)
         file.close()
         if s.empty():
-            current_hour = datetime.now().hour
-            if state['humidity'] > MAX_HUM and \
-                    state['temperature'] > MIN_TEMP and \
-                    datetime.now() > rest_until and \
-                    19 != current_hour:
+            if should_open(state):
                 schedule_open(AUTO_OPEN_LENGTH)
                 t = Thread(target=run_queue)
                 t.start()
-                rest_until = (datetime.now() + timedelta(seconds=AUTO_OPEN_REST))
+                rest_until = (
+                            datetime.now() + timedelta(seconds=AUTO_OPEN_REST))
         recorder.enter(PROTOCOL_INTERVAL, 1, write_log)
         Thread(target=run_recorder, daemon=False).start()
 
@@ -179,6 +187,7 @@ def open_window(minutes: int = 2):
 
     # TODO: Consider flask.Response(schedule_open(), mimetype='text/html')
     return f'Opening window until {final_time}.'
+
 
 @app.route('/close')
 def close_window():
