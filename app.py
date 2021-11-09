@@ -187,6 +187,8 @@ def close_window():
     list(map(s.cancel, s.queue))
     rest_until = datetime.now() + timedelta(seconds=AUTO_OPEN_REST)
     start_closing()
+    s.enter(MAX_RUNTIME, 2, stop_power)
+    s.run()
     return f'Closing window at least util {rest_until}.'
 
 
