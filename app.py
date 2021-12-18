@@ -29,7 +29,7 @@ MAX_RUNTIME = 8
 PROTOCOL_INTERVAL = 30
 LOGLEVEL = logging.DEBUG
 MAX_HUM = 60
-MIN_TEMP = 20
+MIN_TEMP = 21
 AUTO_OPEN_LENGTH = 60
 AUTO_OPEN_REST = 900
 rest_until = datetime.now()
@@ -57,14 +57,29 @@ recorder = scheduler(time.time, time.sleep)
 
 
 def should_open():
-    global state, rest_until
+    global state
+    logging.debug(f"Check conditions for state {state}")
     current_hour = datetime.now().hour
+    hum_too_high = state['humidity'] > MAX_HUM
+    temperate_high_enough = state['temperature'] > MIN_TEMP
+    no_bath_time = 19 != current_hour
+    logging.debug({
+        "hum_too_high":hum_too_high,
+        "temperate_high_enough":temperate_high_enough,
+        "no_bath_time":no_bath_time})
+    return hum_too_high and temperate_high_enough and no_bath_time
 
-    return state['humidity'] > MAX_HUM and \
-           state['temperature'] > MIN_TEMP and \
-           datetime.now() > rest_until and \
-           19 != current_hour
 
+def get_state():
+    global dht_device, state
+    logging.debug('Get state')
+    try:
+        state['humidity'] = dht_device.humidity
+        state['temperature'] = dht_device.temperature
+        state['time'] = time_as_string()
+    except Exception as e:
+        logging.warning('Cannot read sensor data: %s', e)
+    logging.debug(f'State returned {state}')
 
 def do_events():
     global rest_until, state
@@ -81,7 +96,8 @@ def do_events():
             writer.writeheader()
         writer.writerow(state)
         file.close()
-        if s.empty():
+        if s.empty() and datetime.now() > rest_until:
+            logging.debug("Que is empty. Checking window state.")
             if should_open():
                 schedule_open(-1)
                 t = Thread(target=run_queue)
@@ -102,16 +118,6 @@ rec = Thread(target=do_events)
 rec.start()
 
 
-def get_state():
-    global dht_device, state
-    logging.debug('Get state')
-    try:
-        state['humidity'] = dht_device.humidity
-        state['temperature'] = dht_device.temperature
-        state['time'] = time_as_string()
-    except Exception as e:
-        logging.warning('Cannot read sensor data: %s', e)
-    logging.debug('State returned')
 
 
 @app.route('/')
@@ -129,7 +135,7 @@ def info():
 def stop_power():
     global state
     logging.debug('Stopping power')
-    state.state =  f"stopped ({state.state})"
+    state['state'] =  f"stopped ({state['state']})"
     GPIO.output(PORT_MAIN, POWER_OFF)
     GPIO.output(PORT_DIRECTION, POWER_OFF)
 
@@ -137,7 +143,7 @@ def stop_power():
 def start_closing():
     global state
     logging.debug('Start closing')
-    state.state = 'closing'
+    state['state'] = 'closing'
     GPIO.output(PORT_MAIN, POWER_ON)
     GPIO.output(PORT_DIRECTION, DIRECTION_CLOSE)
 
@@ -145,7 +151,7 @@ def start_closing():
 def start_opening():
     global state
     logging.debug('Start opening')
-    state.state = 'opening'
+    state['state'] = 'opening'
     GPIO.output(PORT_MAIN, POWER_ON)
     GPIO.output(PORT_DIRECTION, DIRECTION_OPEN)
 
@@ -162,7 +168,7 @@ def check_open():
 
 def schedule_open(sec):
     global state
-    if state.state == 'shutdown':
+    if state['state'] == 'shutdown':
         return
     list(map(s.cancel, s.queue))
     s.enter(0, 1, start_opening)
@@ -176,7 +182,7 @@ def schedule_open(sec):
 
 def schedule_close(sec):
     global state
-    if state == 'shutdown':
+    if state['state'] == 'shutdown':
         return
     list(map(s.cancel, s.queue))
     s.enter(0, 1, start_closing)
@@ -190,8 +196,8 @@ def run_queue():
 def shutdown():
     global state
     logging.debug("shutting down")
-    if state.state not in ['stopped (closing)', 'shutdown']:
-        state.state = 'shutdown'
+    if state['state'] not in ['stopped (closing)', 'shutdown']:
+        state['state'] = 'shutdown'
         logging.debug("closing window (shutdown)")
         start_closing()
         list(map(s.cancel, s.queue))
