@@ -16,12 +16,12 @@ from flask import Flask
 # TODO: Move to config file
 PORT_DHT = board.D14
 # main power switch 0, LOW on
-PORT_MAIN = 2 # GPIO.BOARD 7
+PORT_MAIN = 2
 # PORT_MAIN = 27 # GPIO.BOARD 13
 POWER_OFF = 1
 POWER_ON = 0
 # direction switch 0 -> open. 1 -> close
-PORT_DIRECTION = 3 # GPIO.BOARD 11
+PORT_DIRECTION = 3
 DIRECTION_OPEN = 0
 DIRECTION_CLOSE = 1
 # max runtime in seconds
@@ -32,7 +32,6 @@ MAX_HUM = 60
 MIN_TEMP = 21
 AUTO_OPEN_LENGTH = 60
 AUTO_OPEN_REST = 900
-rest_until = datetime.now()
 
 logging.basicConfig(format='%(asctime)s %(message)s', level=LOGLEVEL)
 logging.debug('Start logging')
@@ -44,13 +43,18 @@ GPIO.setup(PORT_MAIN, GPIO.OUT, initial=POWER_OFF)
 GPIO.setup(PORT_DIRECTION, GPIO.OUT)
 dht_device = adafruit_dht.DHT22(PORT_DHT)
 
+
 def time_as_string():
     return datetime.now().strftime("%H:%M:%S")
 
-state = {'time': time_as_string(),
-             'state': 'unknown',
-             'humidity': -1,
-             'temperature': 100}
+
+state = {
+    'time': time_as_string(),
+    'state': 'unknown',
+    'humidity': -1,
+    'temperature': 100,
+    'rest_until': datetime.now()
+}
 
 s = scheduler(time.time, time.sleep)
 recorder = scheduler(time.time, time.sleep)
@@ -62,8 +66,9 @@ def should_open():
     hum_too_high = state['humidity'] > MAX_HUM
     temperate_high_enough = state['temperature'] > MIN_TEMP
     logging.debug({
-        "hum_too_high":hum_too_high,
-        "temperate_high_enough":temperate_high_enough})
+        "hum_too_high": hum_too_high,
+        "temperate_high_enough": temperate_high_enough
+    })
     return hum_too_high and temperate_high_enough
 
 
@@ -78,8 +83,9 @@ def get_state():
         logging.warning('Cannot read sensor data: %s', e)
     logging.debug(f'State returned {state}')
 
+
 def do_events():
-    global rest_until, state
+    global state
 
     get_state()
 
@@ -93,13 +99,14 @@ def do_events():
             writer.writeheader()
         writer.writerow(state)
         file.close()
-        if s.empty() and datetime.now() > rest_until:
+        if s.empty() and datetime.now() > state['rest_until']:
             logging.debug("Que is empty. Checking window state.")
             if should_open():
                 schedule_open(-1)
                 t = Thread(target=run_queue)
                 t.start()
-                rest_until = datetime.now() + timedelta(seconds=AUTO_OPEN_REST)
+                state['rest_until'] = datetime.now() + timedelta(
+                    seconds=AUTO_OPEN_REST)
         recorder.enter(PROTOCOL_INTERVAL, 1, do_events)
         Thread(target=run_recorder, daemon=False).start()
 
@@ -107,12 +114,14 @@ def do_events():
 def run_recorder():
     recorder.run()
 
+
 rec = Thread(target=do_events)
 rec.start()
 
+
 @app.route('/')
 def info():
-    global rest_until, state
+    global state
     logging.debug('Opening main page')
     return f'Temperature {state["temperature"]}°C and ' \
            f'humidity {state["humidity"]}% ' \
@@ -120,12 +129,13 @@ def info():
            f'<a href="open/2">open window</a><br/>' \
            f'<a href="close/2">close window</a><br/>' \
            f'The window is currently {state["state"]} ' \
-           f'and will not move before {rest_until}'
+           f'and will not move before {state["rest_until"]}'
+
 
 def stop_power():
     global state
     logging.debug('Stopping power')
-    state['state'] =  f"stopped ({state['state']})"
+    state['state'] = f"stopped ({state['state']})"
     GPIO.output(PORT_MAIN, POWER_OFF)
     GPIO.output(PORT_DIRECTION, POWER_OFF)
 
@@ -178,6 +188,7 @@ def schedule_close(sec):
     s.enter(0, 1, start_closing)
     s.enter(MAX_RUNTIME, 1, stop_power)
 
+
 def run_queue():
     s.run()
 
@@ -197,14 +208,14 @@ def shutdown():
 
 @app.route('/open/<int:minutes>')
 def open_window(minutes: int = 2):
-    global rest_until
+    global state
     logging.debug('Opening window open page')
     schedule_open(minutes * 60)
     t = Thread(target=run_queue)
     t.start()
     close_time = (datetime.now() + timedelta(minutes=minutes))
     final_time = close_time.strftime("%H:%M:%S")
-    rest_until = close_time + timedelta(seconds=AUTO_OPEN_REST)
+    state['rest_until'] = close_time + timedelta(seconds=AUTO_OPEN_REST)
 
     # TODO: Consider flask.Response(schedule_open(), mimetype='text/html')
     return f'Opening window until {final_time}.'
@@ -212,14 +223,14 @@ def open_window(minutes: int = 2):
 
 @app.route('/close/<int:minutes>')
 def close_window(minutes: int = 2):
-    global rest_until
+    global state
     logging.debug('Close window manually.')
     list(map(s.cancel, s.queue))
-    rest_until = datetime.now() + timedelta(seconds=minutes*60)
-    schedule_close(minutes*60)
+    state['rest_until'] = datetime.now() + timedelta(seconds=minutes * 60)
+    schedule_close(minutes * 60)
     t = Thread(target=run_queue)
     t.start()
-    return f'Closing window at least util {rest_until}.'
+    return f'Closing window at least util {state["rest_until"]}.'
 
 
 if __name__ == '__main__':
