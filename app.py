@@ -93,7 +93,7 @@ def do_events():
     filename = f'{date}.csv'
     file_exists = os.path.isfile(filename)
     with open(f'{date}.csv', 'a+') as file:
-        fieldnames = ['time', 'state', 'humidity', 'temperature']
+        fieldnames = ['time', 'state', 'humidity', 'temperature','rest_until']
         writer: DictWriter = csv.DictWriter(file, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
