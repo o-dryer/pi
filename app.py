@@ -59,15 +59,12 @@ recorder = scheduler(time.time, time.sleep)
 def should_open():
     global state
     logging.debug(f"Check conditions for state {state}")
-    current_hour = datetime.now().hour
     hum_too_high = state['humidity'] > MAX_HUM
     temperate_high_enough = state['temperature'] > MIN_TEMP
-    no_bath_time = 19 != current_hour
     logging.debug({
         "hum_too_high":hum_too_high,
-        "temperate_high_enough":temperate_high_enough,
-        "no_bath_time":no_bath_time})
-    return hum_too_high and temperate_high_enough and no_bath_time
+        "temperate_high_enough":temperate_high_enough})
+    return hum_too_high and temperate_high_enough
 
 
 def get_state():
@@ -110,15 +107,8 @@ def do_events():
 def run_recorder():
     recorder.run()
 
-
-
-
-
 rec = Thread(target=do_events)
 rec.start()
-
-
-
 
 @app.route('/')
 def info():
@@ -225,7 +215,7 @@ def close_window(minutes: int = 2):
     global rest_until
     logging.debug('Close window manually.')
     list(map(s.cancel, s.queue))
-    rest_until = datetime.now() + timedelta(seconds=AUTO_OPEN_REST)
+    rest_until = datetime.now() + timedelta(seconds=minutes*60)
     schedule_close(minutes*60)
     t = Thread(target=run_queue)
     t.start()
