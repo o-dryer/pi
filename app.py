@@ -16,11 +16,12 @@ from flask import Flask
 # TODO: Move to config file
 PORT_DHT = board.D14
 # main power switch 0, LOW on
-PORT_MAIN = 4
+PORT_MAIN = 2 # GPIO.BOARD 7
+# PORT_MAIN = 27 # GPIO.BOARD 13
 POWER_OFF = 1
 POWER_ON = 0
 # direction switch 0 -> open. 1 -> close
-PORT_DIRECTION = 17
+PORT_DIRECTION = 3 # GPIO.BOARD 11
 DIRECTION_OPEN = 0
 DIRECTION_CLOSE = 1
 # max runtime in seconds
@@ -42,14 +43,21 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setup(PORT_MAIN, GPIO.OUT, initial=POWER_OFF)
 GPIO.setup(PORT_DIRECTION, GPIO.OUT)
 dht_device = adafruit_dht.DHT22(PORT_DHT)
-window_state = 'unknown'
+
+def time_as_string():
+    return datetime.now().strftime("%H:%M:%S")
+
+state = {'time': time_as_string(),
+             'state': 'unknown',
+             'humidity': -1,
+             'temperature': 100}
+
 s = scheduler(time.time, time.sleep)
 recorder = scheduler(time.time, time.sleep)
 
 
-def should_open(state):
-    global window_state, rest_until
-
+def should_open():
+    global state, rest_until
     current_hour = datetime.now().hour
 
     return state['humidity'] > MAX_HUM and \
@@ -58,8 +66,11 @@ def should_open(state):
            19 != current_hour
 
 
-def write_log():
-    global rest_until
+def do_events():
+    global rest_until, state
+
+    get_state()
+
     date = datetime.today().strftime("%y%m%d")
     filename = f'{date}.csv'
     file_exists = os.path.isfile(filename)
@@ -68,17 +79,15 @@ def write_log():
         writer: DictWriter = csv.DictWriter(file, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
-        state = get_state()
         writer.writerow(state)
         file.close()
         if s.empty():
-            if should_open(state):
+            if should_open():
                 schedule_open(-1)
                 t = Thread(target=run_queue)
                 t.start()
-                rest_until = (
-                        datetime.now() + timedelta(seconds=AUTO_OPEN_REST))
-        recorder.enter(PROTOCOL_INTERVAL, 1, write_log)
+                rest_until = datetime.now() + timedelta(seconds=AUTO_OPEN_REST)
+        recorder.enter(PROTOCOL_INTERVAL, 1, do_events)
         Thread(target=run_recorder, daemon=False).start()
 
 
@@ -86,70 +95,63 @@ def run_recorder():
     recorder.run()
 
 
-def time_as_string():
-    return datetime.now().strftime("%H:%M:%S")
 
 
-rec = Thread(target=write_log)
+
+rec = Thread(target=do_events)
 rec.start()
 
 
 def get_state():
-    global dht_device
+    global dht_device, state
     logging.debug('Get state')
-    state = {'time': time_as_string(),
-             'state': window_state,
-             'humidity': -1,
-             'temperature': 100}
     try:
         state['humidity'] = dht_device.humidity
         state['temperature'] = dht_device.temperature
+        state['time'] = time_as_string()
     except Exception as e:
         logging.warning('Cannot read sensor data: %s', e)
     logging.debug('State returned')
-    return state
 
 
 @app.route('/')
 def info():
-    global rest_until
+    global rest_until, state
     logging.debug('Opening main page')
-    state = get_state()
-
     return f'Temperature {state["temperature"]}°C and ' \
            f'humidity {state["humidity"]}% ' \
            f'as of {state["time"]}.<br/>' \
            f'<a href="open/2">open window</a><br/>' \
-           f'<a href="close">close window</a><br/>' \
-           f'The window is currently {state["state"]}' \
+           f'<a href="close/2">close window</a><br/>' \
+           f'The window is currently {state["state"]} ' \
            f'and will not move before {rest_until}'
 
 def stop_power():
-    global window_state
+    global state
     logging.debug('Stopping power')
-    window_state = f"stopped ({window_state})"
+    state.state =  f"stopped ({state.state})"
     GPIO.output(PORT_MAIN, POWER_OFF)
     GPIO.output(PORT_DIRECTION, POWER_OFF)
 
 
 def start_closing():
-    global window_state
+    global state
     logging.debug('Start closing')
-    window_state = 'closing'
+    state.state = 'closing'
     GPIO.output(PORT_MAIN, POWER_ON)
     GPIO.output(PORT_DIRECTION, DIRECTION_CLOSE)
 
 
 def start_opening():
-    global window_state
+    global state
     logging.debug('Start opening')
-    window_state = 'opening'
+    state.state = 'opening'
     GPIO.output(PORT_MAIN, POWER_ON)
     GPIO.output(PORT_DIRECTION, DIRECTION_OPEN)
 
 
 def check_open():
-    if check_open(get_state()):
+    if should_open():
         logging.debug('Keeping window open.')
         s.enter(AUTO_OPEN_LENGTH, 1, check_open)
     else:
@@ -159,8 +161,8 @@ def check_open():
 
 
 def schedule_open(sec):
-    global window_state
-    if window_state == 'shutdown':
+    global state
+    if state.state == 'shutdown':
         return
     list(map(s.cancel, s.queue))
     s.enter(0, 1, start_opening)
@@ -172,16 +174,24 @@ def schedule_open(sec):
     s.enter(sec + MAX_RUNTIME, 1, stop_power)
 
 
+def schedule_close(sec):
+    global state
+    if state == 'shutdown':
+        return
+    list(map(s.cancel, s.queue))
+    s.enter(0, 1, start_closing)
+    s.enter(MAX_RUNTIME, 1, stop_power)
+
 def run_queue():
     s.run()
 
 
 @atexit.register
 def shutdown():
-    global window_state
+    global state
     logging.debug("shutting down")
-    if window_state not in ['stopped (closing)', 'shutdown']:
-        window_state = 'shutdown'
+    if state.state not in ['stopped (closing)', 'shutdown']:
+        state.state = 'shutdown'
         logging.debug("closing window (shutdown)")
         start_closing()
         list(map(s.cancel, s.queue))
@@ -204,15 +214,15 @@ def open_window(minutes: int = 2):
     return f'Opening window until {final_time}.'
 
 
-@app.route('/close')
-def close_window():
+@app.route('/close/<int:minutes>')
+def close_window(minutes: int = 2):
     global rest_until
     logging.debug('Close window manually.')
     list(map(s.cancel, s.queue))
     rest_until = datetime.now() + timedelta(seconds=AUTO_OPEN_REST)
-    start_closing()
-    s.enter(MAX_RUNTIME, 2, stop_power)
-    s.run()
+    schedule_close(minutes*60)
+    t = Thread(target=run_queue)
+    t.start()
     return f'Closing window at least util {rest_until}.'
 
 
